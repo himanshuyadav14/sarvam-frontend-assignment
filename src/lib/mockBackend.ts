@@ -1,4 +1,4 @@
-import type { StreamError, StreamErrorType } from '../types';
+import type { StreamError, StreamErrorType } from "../types";
 
 // Sample AI response passages for realistic mock streaming
 const MOCK_RESPONSES = [
@@ -26,9 +26,10 @@ Tokens per second (TPS) is the primary throughput metric for LLM inference. Stat
  * Emits words at ~100ms intervals to simulate real model inference.
  */
 export async function* mockStreamGenerator(
-  signal: AbortSignal
+  signal: AbortSignal,
 ): AsyncGenerator<string, void, unknown> {
-  const response = MOCK_RESPONSES[Math.floor(Math.random() * MOCK_RESPONSES.length)];
+  const response =
+    MOCK_RESPONSES[Math.floor(Math.random() * MOCK_RESPONSES.length)];
   const words = response.split(/(\s+)/); // preserve whitespace tokens
 
   for (const word of words) {
@@ -46,31 +47,83 @@ export async function* mockStreamGenerator(
  * Simulates a fetch-based streaming endpoint using a ReadableStream.
  * Returns a Response-like object that can be consumed via ReadableStream reader.
  */
-export function createMockStreamResponse(signal: AbortSignal): ReadableStream<Uint8Array> {
-  const response = MOCK_RESPONSES[Math.floor(Math.random() * MOCK_RESPONSES.length)];
+// ─── Mid-stream error scenarios ──────────────────────────────────────────────
+const ERROR_SCENARIOS: Array<{ type: string; message: string }> = [
+  {
+    type: "network",
+    message: "Network error — connection to inference server lost.",
+  },
+  {
+    type: "timeout",
+    message: "Request timed out. The server took too long to respond.",
+  },
+  {
+    type: "interrupted",
+    message: "Stream was interrupted unexpectedly by the server.",
+  },
+];
+
+/**
+ * Returns true if this run should inject a mid-stream error.
+ * ~40% chance by default. Pass `force = true` to always inject.
+ */
+export function shouldInjectError(force = false): boolean {
+  return force || Math.random() < 0.4;
+  // return true;
+}
+
+export function createMockStreamResponse(
+  signal: AbortSignal,
+  injectError = false,
+): ReadableStream<Uint8Array> {
+  const response =
+    MOCK_RESPONSES[Math.floor(Math.random() * MOCK_RESPONSES.length)];
   const words = response.split(/(\s+)/);
   const encoder = new TextEncoder();
 
   let wordIndex = 0;
   let intervalId: ReturnType<typeof setInterval> | null = null;
 
+  // Decide error injection up front
+  const willError = injectError || shouldInjectError();
+  // Error fires after 40–65% of words have been emitted
+  const errorAt = willError
+    ? Math.floor(words.length * (0.4 + Math.random() * 0.25))
+    : Infinity;
+  const errorScenario =
+    ERROR_SCENARIOS[Math.floor(Math.random() * ERROR_SCENARIOS.length)];
+
   return new ReadableStream<Uint8Array>({
     start(controller) {
-      signal.addEventListener('abort', () => {
+      signal.addEventListener("abort", () => {
         if (intervalId !== null) clearInterval(intervalId);
         controller.close();
       });
 
-      intervalId = setInterval(() => {
-        if (signal.aborted || wordIndex >= words.length) {
-          if (intervalId !== null) clearInterval(intervalId);
-          if (!signal.aborted) controller.close();
-          return;
-        }
+      intervalId = setInterval(
+        () => {
+          if (signal.aborted) return;
 
-        const chunk = words[wordIndex++];
-        controller.enqueue(encoder.encode(chunk));
-      }, 90 + Math.random() * 40);
+          // Inject error mid-stream
+          if (wordIndex >= errorAt) {
+            if (intervalId !== null) clearInterval(intervalId);
+            const err = new Error(errorScenario.message);
+            err.message = errorScenario.message;
+            controller.error(err);
+            return;
+          }
+
+          if (wordIndex >= words.length) {
+            if (intervalId !== null) clearInterval(intervalId);
+            controller.close();
+            return;
+          }
+
+          const chunk = words[wordIndex++];
+          controller.enqueue(encoder.encode(chunk));
+        },
+        90 + Math.random() * 40,
+      );
     },
   });
 }
@@ -78,29 +131,46 @@ export function createMockStreamResponse(signal: AbortSignal): ReadableStream<Ui
 // ─── Error Utilities ─────────────────────────────────────────────────────────
 
 export function classifyError(error: unknown): StreamError {
-  if (error instanceof DOMException && error.name === 'AbortError') {
-    return { type: 'aborted', message: 'Stream was cancelled.', retryable: false };
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return {
+      type: "aborted",
+      message: "Stream was cancelled.",
+      retryable: false,
+    };
   }
-  if (error instanceof TypeError && error.message.includes('fetch')) {
-    return { type: 'network', message: 'Network error — check your connection.', retryable: true };
+  if (error instanceof TypeError && error.message.includes("fetch")) {
+    return {
+      type: "network",
+      message: "Network error — check your connection.",
+      retryable: true,
+    };
   }
-  if (error instanceof Error && error.message.includes('timeout')) {
-    return { type: 'timeout', message: 'Request timed out. The server took too long.', retryable: true };
+  if (error instanceof Error && error.message.includes("timeout")) {
+    return {
+      type: "timeout",
+      message: "Request timed out. The server took too long.",
+      retryable: true,
+    };
   }
-  if (error instanceof Error && error.message.includes('interrupted')) {
-    return { type: 'interrupted', message: 'Stream was interrupted unexpectedly.', retryable: true };
+  if (error instanceof Error && error.message.includes("interrupted")) {
+    return {
+      type: "interrupted",
+      message: "Stream was interrupted unexpectedly.",
+      retryable: true,
+    };
   }
-  const msg = error instanceof Error ? error.message : 'An unknown error occurred.';
-  return { type: 'unknown', message: msg, retryable: true };
+  const msg =
+    error instanceof Error ? error.message : "An unknown error occurred.";
+  return { type: "unknown", message: msg, retryable: true };
 }
 
 export function getErrorIcon(type: StreamErrorType): string {
   const icons: Record<StreamErrorType, string> = {
-    network: '📡',
-    timeout: '⏱',
-    interrupted: '⚡',
-    aborted: '🛑',
-    unknown: '⚠️',
+    network: "📡",
+    timeout: "⏱",
+    interrupted: "⚡",
+    aborted: "🛑",
+    unknown: "⚠️",
   };
   return icons[type];
 }
@@ -117,7 +187,7 @@ export function formatDuration(ms: number): string {
 }
 
 export function formatTPS(tps: number): string {
-  if (tps === 0) return '—';
+  if (tps === 0) return "—";
   return tps < 10 ? tps.toFixed(1) : Math.round(tps).toString();
 }
 

@@ -167,8 +167,12 @@ export const Playground: React.FC = () => {
   }, [mode, prompt, recorderState.durationMs, startStream]);
 
   const handleRetry = useCallback(() => {
-    if (mode === 'text' && prompt.trim()) startStream(prompt.trim());
-  }, [mode, prompt, startStream]);
+    if (mode === 'text' && prompt.trim()) {
+      startStream(prompt.trim());
+    } else if (mode === 'audio' && recorderState.status === 'ready') {
+      startStream(`[Audio input — ${(recorderState.durationMs / 1000).toFixed(1)}s recorded]`);
+    }
+  }, [mode, prompt, recorderState.status, recorderState.durationMs, startStream]);
 
   const handleModeChange = useCallback((newMode: InputMode) => {
     if (isStreaming) return;
