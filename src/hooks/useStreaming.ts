@@ -73,7 +73,7 @@ export function useStreaming(): UseStreamingReturn {
     }));
   }, []);
 
-  const startStream = useCallback(async (prompt: string) => {
+  const startStream = useCallback(async (_prompt: string) => {
     // Abort any existing stream
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
